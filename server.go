@@ -25,7 +25,7 @@ const MagicNumber = 0x3bef5c
 // Option 消息的编解码方式
 type Option struct {
 	MagicNumber int
-	CodeType    codec.Type
+	CodecType   codec.Type
 }
 
 // Server 作为RPC的服务端
@@ -34,10 +34,10 @@ type Server struct{}
 var (
 	// DefaultServer 是默认的*Server实例 为了用户使用方便
 	DefaultServer = NewServer()
-	// DefaultOptions 是默认的Option实例
-	DefaultOptions = &Option{
+	// DefaultOption 是默认的Option实例
+	DefaultOption = &Option{
 		MagicNumber: MagicNumber,
-		CodeType:    codec.GobType,
+		CodecType:   codec.GobType,
 	}
 	// invalidRequest 是响应 argv 发生错误时的占位符
 	invalidRequest = struct{}{}
@@ -82,9 +82,9 @@ func (server *Server) ServerConn(conn io.ReadWriteCloser) {
 	if opt.MagicNumber != MagicNumber {
 		log.Printf("rpc server invalid magic number: %x", opt.MagicNumber)
 	}
-	f := codec.NewCodeFuncMap[opt.CodeType]
+	f := codec.NewCodeFuncMap[opt.CodecType]
 	if f == nil {
-		log.Printf("rpc server: invalid codec type %s", opt.CodeType)
+		log.Printf("rpc server: invalid codec type %s", opt.CodecType)
 		return
 	}
 	// 接下来的处理交给 serveCodec

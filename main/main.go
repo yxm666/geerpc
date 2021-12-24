@@ -1,12 +1,11 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	geerpc "gee-rpc"
-	"gee-rpc/codec"
 	"log"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -22,29 +21,28 @@ func startServer(addr chan string) {
 }
 
 func main() {
+	log.SetFlags(0)
 	addr := make(chan string)
 	go startServer(addr)
-	conn, _ := net.Dial("tcp", <-addr)
+	client, _ := geerpc.Dial("tcp", <-addr)
 	// 创建个方法就为了接受Close错误，然后接受，但是不关注error，用_接受(只能在func里使用)
-	defer func() { _ = conn.Close() }()
+	defer func() { _ = client.Close() }()
 
 	time.Sleep(time.Second)
 
 	// 客户端首先发送Option进行协议交换
-	_ = json.NewEncoder(conn).Encode(geerpc.DefaultOptions)
-	cc := codec.NewGobCodec(conn)
+	var wg sync.WaitGroup
 	for i := 0; i < 5; i++ {
-		// 发送消息请求头
-		h := &codec.Header{
-			ServiceMethod: "Foo.Sum",
-			Seq:           uint64(i),
-		}
-		//发送消息体
-		_ = cc.Write(h, fmt.Sprintf("geerpc req %d", h.Seq))
-		_ = cc.ReadHeader(h)
-		var reply string
-		// 解析服务端的响应reply，并打印
-		_ = cc.ReadBody(&reply)
-		log.Println("reply:", reply)
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			args := fmt.Sprintf("geerpc req %d", i)
+			var reply string
+			if err := client.Call("Foo.Sum", args, &reply); err != nil {
+				log.Fatal("call Foo.Sum error:", err)
+			}
+			log.Println("reply:", reply)
+		}(i)
 	}
+	wg.Wait()
 }
