@@ -3,6 +3,7 @@ package geerpc
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"gee-rpc/codec"
 	"go/ast"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const MagicNumber = 0x3bef5c
@@ -31,6 +33,10 @@ type Option struct {
 	MagicNumber int
 	// 决定后续Header和 Body的编解码方式
 	CodecType codec.Type
+	// 默认值为10S
+	ConnectTimeout time.Duration
+	// 默认值为0，即不设限
+	HandleTimeout time.Duration
 }
 
 // Server 作为RPC的服务端
@@ -53,8 +59,9 @@ var (
 	DefaultServer = NewServer()
 	// DefaultOption 是默认的Option实例
 	DefaultOption = &Option{
-		MagicNumber: MagicNumber,
-		CodecType:   codec.GobType,
+		MagicNumber:    MagicNumber,
+		CodecType:      codec.GobType,
+		ConnectTimeout: time.Second * 10,
 	}
 )
 
@@ -106,24 +113,24 @@ func (server *Server) ServerConn(conn io.ReadWriteCloser) {
 		return
 	}
 	// 接下来的处理交给 serveCodec
-	server.serveCodec(f(conn))
+	server.serveCodec(f(conn), &opt)
 }
 
 // invalidRequest 是响应 argv 发生错误时的占位符
 var invalidRequest = struct{}{}
 
 // serveCodec 主要包含三个阶段
-func (server *Server) serveCodec(cc codec.Codec) {
+func (server *Server) serveCodec(cc codec.Codec, opt *Option) {
 	// 确保发送完整的响应
 	sending := new(sync.Mutex)
 	// 等待，直到所有的请求都被处理
 	wg := new(sync.WaitGroup)
 	/* 在一次连接中，允许接受多个请求，即多个request header 和 request body，
-	使用for无限制等待请求的到来，直到发生错误(关闭or报文有问题)
+	   使用for无限制等待请求的到来，直到发生错误(关闭or报文有问题)
 
-	注意:- handleRequest使用了协程并发执行请求
-		-  处理请求是并发的，但是回复请求的报文必须是逐个发送的，并发容易导致多个回复报文交织在一期，客户端无法解析。使用锁(sending)保证
-	    - 尽力而为，只有在 header解析失败时，才终止循环
+	   注意:- handleRequest使用了协程并发执行请求
+	   	-  处理请求是并发的，但是回复请求的报文必须是逐个发送的，并发容易导致多个回复报文交织在一期，客户端无法解析。使用锁(sending)保证
+	       - 尽力而为，只有在 header解析失败时，才终止循环
 	*/
 	for {
 		// 读取请求
@@ -141,7 +148,7 @@ func (server *Server) serveCodec(cc codec.Codec) {
 		//main协程通过调用wg.Add(delta int)设置worker协程的个数，然后创建worker协程
 		wg.Add(1)
 		// 创建协程 处理请求
-		go server.handleRequest(cc, req, sending, wg)
+		go server.handleRequest(cc, req, sending, wg, opt.HandleTimeout)
 	}
 	// main协程调用wg.Wait()且被block,直到所有的worker协程全部执行结束后返回
 	wg.Wait()
@@ -200,17 +207,36 @@ func (server *Server) sendResponse(cc codec.Codec, h *codec.Header, body interfa
 }
 
 // handleRequest 并发处理请求
-func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup) {
+func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup, timeout time.Duration) {
 	// 在worker协程结束以后，都要调用wg.Done()
 	defer wg.Done()
-	// 将replyv传递给 sendResponse 完成序列化
-	err := req.svc.call(req.mtype, req.argv, req.replyv)
-	if err != nil {
-		req.h.Error = err.Error()
-		server.sendResponse(cc, req.h, invalidRequest, sending)
+	called := make(chan struct{})
+	sent := make(chan struct{})
+	go func() {
+		err := req.svc.call(req.mtype, req.argv, req.replyv)
+		called <- struct{}{}
+		if err != nil {
+			req.h.Error = err.Error()
+			server.sendResponse(cc, req.h, invalidRequest, sending)
+			sent <- struct{}{}
+			return
+		}
+		server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
+		sent <- struct{}{}
+	}()
+
+	if timeout == 0 {
+		<-called
+		<-sent
 		return
 	}
-	server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
+	select {
+	case <-time.After(timeout):
+		req.h.Error = fmt.Sprintf("rpc server: request handle timeout: expect within %s", timeout)
+		server.sendResponse(cc, req.h, invalidRequest, sending)
+	case <-called:
+		<-sent
+	}
 }
 
 // methodType 使用反射将结构体与服务的映射关系

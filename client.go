@@ -1,12 +1,14 @@
 package geerpc
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"gee-rpc/codec"
 	"log"
 	"net"
 	"sync"
+	"time"
 )
 
 var (
@@ -193,15 +195,23 @@ func parseOptions(opts ...*Option) (*Option, error) {
 	return opt, nil
 }
 
+type clientResult struct {
+	client *Client
+	err    error
+}
+
+type newClientFunc func(conn net.Conn, opt *Option) (client *Client, err error)
+
 // Dial 连接到指定网络地址的 RPC 服务器,使用编解码器 Option
-func Dial(network, address string, opts ...*Option) (client *Client, err error) {
+func dialTimeout(f newClientFunc, network, address string, opts ...*Option) (client *Client, err error) {
 	// 获得一个编解码器
 	opt, err := parseOptions(opts...)
 	if err != nil {
 		return nil, err
 	}
 	//连接到指定网络上的地址
-	conn, err := net.Dial(network, address)
+	conn, err := net.DialTimeout(network, address, opt.ConnectTimeout)
+
 	if err != nil {
 		return nil, err
 	}
@@ -211,9 +221,28 @@ func Dial(network, address string, opts ...*Option) (client *Client, err error) 
 			_ = conn.Close()
 		}
 	}()
-	// 创建连接读取请求
-	return NewClient(conn, opt)
+	ch := make(chan clientResult)
+	go func() {
+		client, err := f(conn, opt)
+		ch <- clientResult{client: client, err: err}
+	}()
+	if opt.ConnectTimeout == 0 {
+		result := <-ch
+		return result.client, result.err
+	}
+	select {
+	case <-time.After(opt.ConnectTimeout):
+		return nil, fmt.Errorf("rpc client: connect timeout: expect within %s", opt.ConnectTimeout)
+	case result := <-ch:
+		return result.client, result.err
+	}
 }
+
+// Dial connects to an RPC server at the specified network address
+func Dial(network, address string, opts ...*Option) (*Client, error) {
+	return dialTimeout(NewClient, network, address, opts...)
+}
+
 func (client *Client) send(call *Call) {
 	// 确保client发送完整的请求
 	client.sending.Lock()
@@ -262,9 +291,15 @@ func (client *Client) Go(serviceMethod string, args, reply interface{}, done cha
 
 // Call 调用命名的函数，等待它完成,
 // 并返回其错误状态。
-func (client *Client) Call(serviceMethod string, args, reply interface{}) error {
+func (client *Client) Call(ctx context.Context, serviceMethod string, args, reply interface{}) error {
 	call := <-client.Go(serviceMethod, args, reply, make(chan *Call, 1)).Done
-	return call.Error
+	select {
+	case <-ctx.Done():
+		client.removeCall(call.Seq)
+		return errors.New("rpc client: call failed: " + ctx.Err().Error())
+	case call := <-call.Done:
+		return call.Error
+	}
 }
 
 // 表示Client 实现了 io.Closer接口
