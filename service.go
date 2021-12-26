@@ -1,4 +1,4 @@
-package geerpc
+package gee_rpc
 
 import (
 	"go/ast"

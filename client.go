@@ -1,11 +1,11 @@
-package geerpc
+package gee_rpc
 
 import (
 	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"gee-rpc/codec"
+	"geerpc/codec"
 	"io"
 	"log"
 	"net"
