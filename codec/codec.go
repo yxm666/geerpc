@@ -3,7 +3,7 @@ package codec
 import "io"
 
 /*
-	- 使用 encoding/gob 实现消息的编解码(序列化与😡序列化)
+	- 使用 encoding/gob 实现消息的编解码(序列化与反序列化)
 	- 实现了一个简易的服务端，仅接受消息，不处理
 */
 
@@ -19,7 +19,11 @@ const (
 
 var NewCodeFuncMap map[Type]NewCodeFunc
 
-// Header 头信息
+type Type string
+
+type NewCodeFunc func(closer io.ReadWriteCloser) Codec
+
+// Header 消息头信息,我们将请求和响应中的参数和返回值抽象为body,剩余的信息放回在header中
 type Header struct {
 	// ServiceMethod 服务名和方法名
 	ServiceMethod string
@@ -29,7 +33,7 @@ type Header struct {
 	Error string
 }
 
-//Codec 消息体
+//Codec 抽象出对消息体进行编解码的接口 Codec，抽象出接口是为了实现不同的Codec实例
 type Codec interface {
 	io.Closer
 	ReadHeader(header *Header) error
@@ -37,13 +41,10 @@ type Codec interface {
 	Write(*Header, interface{}) error
 }
 
-type Type string
-
-type NewCodeFunc func(closer io.ReadWriteCloser) Codec
-
 // init Codec的构造函数
 // 客户端和服务端可通过Codec的Type得到构造函数,从而创建Codec实例
 func init() {
 	NewCodeFuncMap = make(map[Type]NewCodeFunc)
+	// 默认实现的是Gob的编解码器  map的value是构造函数而不是实例
 	NewCodeFuncMap[GobType] = NewGobCodec
 }

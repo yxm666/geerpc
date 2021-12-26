@@ -23,6 +23,7 @@ func startServer(addr chan string) {
 func main() {
 	log.SetFlags(0)
 	addr := make(chan string)
+	// 使用chan，确保服务端端口监听成功，客户端再发起请求
 	go startServer(addr)
 	client, _ := geerpc.Dial("tcp", <-addr)
 	// 创建个方法就为了接受Close错误，然后接受，但是不关注error，用_接受(只能在func里使用)

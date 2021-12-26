@@ -9,6 +9,7 @@ import (
 
 type GobCodec struct {
 	// conn 由构造函数传入，通常是TCP/Unix建立Socket时得到的链接实例
+	// ReadWriteCloser 是对基本的 Read、 Write 和 Close 方法进行分组的接口。
 	conn io.ReadWriteCloser
 	// buf 为了防止阻塞而创建的带缓冲的Writer
 	buf *bufio.Writer
@@ -20,6 +21,7 @@ type GobCodec struct {
 
 // NewGobCodec 构造方法，传入conn返回一个GobCodec指针
 func NewGobCodec(conn io.ReadWriteCloser) Codec {
+	// NewWriter 创建一个具有默认大小缓冲、写入w的*Writer。
 	buf := bufio.NewWriter(conn)
 	return &GobCodec{
 		conn: conn,
@@ -29,6 +31,9 @@ func NewGobCodec(conn io.ReadWriteCloser) Codec {
 	}
 }
 
+/*
+	Read and Write 都使用了 Gob的编码解码器
+*/
 func (c *GobCodec) Close() error {
 	return c.conn.Close()
 }
